@@ -1,6 +1,13 @@
 ---
-title: "Untitled"
-format: html
+project:
+  title: "CSU Ess lab 6"
+  output_dir: docs
+  type: website
+format: 
+  html:
+    self-contained: true
+execute:
+  echo: true
 editor: visual
 ---
 
