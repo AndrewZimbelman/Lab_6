@@ -1,0 +1,268 @@
+---
+title: "Untitled"
+format: html
+editor: visual
+---
+
+```{r}
+
+library(tidyverse)
+library(tidymodels)
+library(powerjoin)
+library(glue)
+library(vip)
+library(baguette)
+library(ggplot2)
+library(ggpubr)
+library(parsnip)
+echo = FALSE
+
+```
+
+```{r}
+root <-'https://gdex.ucar.edu/dataset/camels/file'
+download.file('https://gdex.ucar.edu/dataset/camels/file/camels_attributes_v2.0.pdf',
+              'camels_attributes_v2.0.pdf')
+types <- c("clim", "geol", "soil", "topo", "vege", "hydro")
+remote_files  <- glue('{root}/camels_{types}.txt')
+local_files   <- glue('{root}/camels_{types}.txt')
+walk2(remote_files, local_files, download.file, quiet = TRUE)
+camels <- map(local_files, read_delim, show_col_types = FALSE)
+camels <- power_full_join(camels ,by = 'gauge_id')
+
+
+
+```
+
+## Question 1
+
+it appears as if zero q mean is meant to represent series of dates with 0 mean daily discharge
+
+## Question 2
+
+Graph 1
+
+```{r}
+#graph 1 
+camels_aridity <- camels |> 
+  arrange(-aridity)
+aridity_graph <- ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
+      borders("state", colour = "grey50") + 
+      geom_point(size = 0.5,aes(color = p_mean)) +
+      scale_color_gradient(low = "blue", high = "yellow") + 
+      theme_linedraw() +
+      labs(  title = "Precipitation & Aridity In United States River Basins", x = "Latitude", y = "Longitude", color = 'aridity')
+
+      
+
+# Color scale was determined measuring from low aridty which would imply a less dry environment compared to a high aridity environment which would imply a dry environment. 
+
+
+
+      
+  
+```
+
+Graph 2
+
+```{r}
+camels_aridity <- camels |> 
+  arrange(-aridity)
+pmean_graph <- ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +                             borders("state", colour = "grey50") + 
+     geom_point(size = 0.5,aes(color = p_mean)) +
+     scale_color_gradient(low = "yellow", high = "blue") + 
+    theme_linedraw() +
+     labs( x = "Latitude", y = "Longitude", scale = "free", color = "Mean Precipitation ")
+
+
+      
+      
+
+```
+
+Graphs Combined
+
+```{r}
+library(patchwork)
+library(gridExtra)
+aridity_graph + pmean_graph
+```
+
+## Question 3
+
+```{r}
+
+library(xgboost)
+
+camels <- camels |>
+  mutate(LogQmean = log(q_mean))
+set.seed(10)
+  camels_split <- initial_split(camels, prop = 0.8)
+  camels_training <- training(camels_split)
+  camels_test <- testing(camels_split)
+  camel_fold <- vfold_cv(camels_training, v = 10)
+
+rec <- recipe(LogQmean ~ p_mean + aridity, data = camels_training) |>
+  step_log(all_predictors())|>
+  step_interact(terms = ~ p_mean:aridity)|>
+  step_naomit(all_predictors(), all_outcomes())
+  
+xg_model <- boost_tree() |>
+  set_engine("xgboost")|>
+  set_mode("regression")
+
+xg_wf <- workflow()|>
+  add_recipe(rec)|>
+  add_model(xg_model)|>
+  fit(data = camels_training)
+xg_data <- augment(xg_wf, new_data = camels_test)
+
+nueral_model <- bag_mlp()|>
+  set_engine("nnet")|>
+  set_mode("regression")
+nueral_wf <- workflow()|>
+  add_recipe(rec)|>
+  add_model(nueral_model)|>
+  fit(data = camels_training)
+nueral_data <- augment(nueral_wf, new_data = camels_test)
+wf <- workflow_set(list(rec), list(xg_model, nueral_model)) %>%
+  workflow_map('fit_resamples', resamples = camel_fold) 
+
+autoplot(wf)
+
+  rank_results(wf, rank_metric = "rsq", select_best = TRUE)
+
+```
+
+Overall, The xgboost models seem to work better, as they have a significantly lower standard error value then the nueral network models, they also rank higher in rsq values which tells us more of the variance in the model can be explained by the data.
+
+## Question 4
+
+Choosing Data
+
+```{r}
+# I'm going to select terms that mean daily discharge should have a significant relationship with and use correlation models to see which ones I could possibly model
+ camels |>
+   select(q_mean,slope_mean,slope_fdc, area_gages2,frac_snow,high_prec_freq,low_prec_freq)|>
+  drop_na()|>
+  cor()
+#Strong Correlation is observed with days per year with precipitation 5x higher then mean daily precipitation as well as dry days per year. model will be built to determine if we can predict mean flow based on a certain number of dry days as well as high precipitation days per year. Possibly to help with further research on how climate change could impact river basin mean flow. 
+camels <- camels |>
+  mutate(log_high_freq = log(high_prec_freq))
+
+
+#Code to Visualize distribution of data 
+low_prec_freq <- camels |>
+  pull(low_prec_freq)
+high_prec_freq <- camels |>
+  pull(high_prec_freq)
+log_prec_high <- camels |>
+  mutate(log_high_prec = log(high_prec_freq))|>
+  pull(log_high_prec)
+gghistogram(binwidth=2,low_prec_freq, main = "Dry Days")
+#low_prec_freq data looks relativley normally distributed 
+gghistogram(binwidth = 0.8, high_prec_freq, main = "High Rain Days")
+#high_prec_freq data is slightly left skewed, log makes this skew worse. We will use the non log version of our data for this model. 
+gghistogram(binwidth = 0.1, high_prec_freq, main = "High Rain Days")
+
+
+
+High_flow_graph <- camels |>
+  ggplot(aes(x = high_prec_freq, y = q_mean,color = "q_mean")) +
+  geom_point(aes(color = q_mean)) +
+  scale_color_gradient(low = "blue", high = "yellow") +
+  labs(x = "High Precipitation Days Per year",
+       y = "Mean Daily Discharge",
+       col = "Daily Discharge")
+Low_flow_graph <- camels |>
+  ggplot(aes(x = low_prec_freq, y = q_mean, color = "q_mean")) + 
+  geom_point(aes(color = q_mean)) + 
+  scale_color_gradient(low = 'blue', high = 'yellow') +
+  labs(x = "Dry Days Per Year",
+       y = "Mean Daily Discharge",
+       col = "Daily Discharge")
+Low_flow_graph
+High_flow_graph
+```
+
+Regression & Recipe making
+
+```{r}
+#Linear regression will be used to determine if the dry days and high precipitation days data both have a significant relationship with q_mean. If so we will use both if not we will use the one that does for our model
+linear_model = lm(LogQmean ~ high_prec_freq + low_prec_freq, data = camels)
+summary(linear_model)
+#It appears both have a p value less than 0.05 suggesting that this data has a significant relationship, we will use the data but we will need to try some stuff to get a higher r squared value in our final model. 
+set.seed(123)
+
+camels_split <- initial_split(camels, prop = 0.75)
+camels_train <- training(camels_split)
+camels_test  <- testing(camels_split)
+
+camels_fold <- vfold_cv(camels_train, v = 10)
+rec <- recipe(LogQmean ~ high_prec_freq + low_prec_freq, data = camels_train)|>
+  step_BoxCox(all_predictors()) |>
+  step_center(high_prec_freq)|>
+  #These steps should help raise the r squared value
+  step_naomit(all_predictors(),all_outcomes())
+baked_data =  prep(rec)|>
+  bake(new_data = NULL)
+#The formula used for this was mainly centered around the desire to remove the left skew I had in my predictor values data, primarily in high_prec_freq. Because of this, I used BoxCox which helps to make data have a more normal dsitrubtion as well as center which should also help with this
+
+summary(lm(LogQmean ~ high_prec_freq + low_prec_freq, data = baked_data))
+#r squared is around 59% which isn't great but it will be servicable for our models 
+
+```
+
+Model Creation
+
+```{r}
+rand_model <- rand_forest()|>
+  set_engine("ranger") |>
+  set_mode("regression")
+rand_wf <- workflow()|>
+  add_recipe(rec)|>
+  add_model(rand_model)|>
+  fit(data = camels_train)
+Boost_model <- boost_tree()|>
+  set_engine("xgboost")|>
+  set_mode("regression")
+log_wf <- workflow()|>
+  add_recipe(rec)|>
+  add_model(Boost_model)|>
+  fit(data = camels_train)
+lin_model <- linear_reg() |>
+set_engine("lm") |>
+set_mode("regression")
+lin_wf <- workflow()|>
+  add_recipe(rec)|>
+  add_model(lin_model) |>
+  fit(data = camels_train)
+  
+  
+```
+
+workflow set & evaluation
+
+```{r}
+wf <- workflow_set(list(rec), list(lin_model,Boost_model,rand_model))|>
+      workflow_map('fit_resamples', resamples = camels_fold)
+autoplot(wf)
+rank_results(wf)
+#Our results show that our models haven't been very succesful at showing a relationship and may not be the best as predictors, the best model to use is our rand_forest model so we will use this one and evaluate later. 
+```
+
+Model Prediction & Evaluation
+
+```{r}
+pred_graph <-augment(rand_wf, new_data = camels_test)
+metrics(pred_graph, truth = LogQmean, estimate = .pred)
+obs_pred <- ggplot(pred_graph, aes(x = LogQmean, y =.pred, color = LogQmean))+
+  scale_color_viridis_c() + 
+  geom_point()+
+  labs( x = "Mean Daily Discharge", y = "Predicted Values",
+        color = "Mean Discharge", title = "Predicted vs             Observed ") +
+        geom_abline()
+obs_pred
+```
+
+Overall, our predicted values aligned with our observed values where the majority of the data was centralized which tells me that our values at the beginning and near the end of the graph were outliers from the data, . I believe the r squared value would have increased and a better model would have been made if outliers were eliminated at the beginning of the model creation by filtering out values greater then a certain value, or replacing them with the mean value of the datset. . Overall, this was my first model that I've made and I feel like I have a better understanding about how model building works and I look forward to getting better at it as time goes on and better understanding the different models I can use. This lab was fun!
