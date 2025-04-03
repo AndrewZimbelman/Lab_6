@@ -140,6 +140,7 @@ autoplot(wf)
   rank_results(wf, rank_metric = "rsq", select_best = TRUE)
 
 ```
+
 Overall, The xgboost models seem to work better, as they have a significantly lower standard error value then the nueral network models, they also rank higher in rsq values which tells us more of the variance in the model can be explained by the data.
 
 ## Question 4
@@ -219,6 +220,7 @@ summary(lm(LogQmean ~ high_prec_freq + low_prec_freq, data = baked_data))
 
 ```
 
+Model Creation
 
 ```{r}
 rand_model <- rand_forest()|>
@@ -271,5 +273,3 @@ obs_pred
 ```
 
 Overall, our predicted values aligned with our observed values where the majority of the data was centralized which tells me that our values at the beginning and near the end of the graph were outliers from the data, . I believe the r squared value would have increased and a better model would have been made if outliers were eliminated at the beginning of the model creation by filtering out values greater then a certain value, or replacing them with the mean value of the datset. . Overall, this was my first model that I've made and I feel like I have a better understanding about how model building works and I look forward to getting better at it as time goes on and better understanding the different models I can use. This lab was fun!
-
-
